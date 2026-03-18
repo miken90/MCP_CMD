@@ -81,7 +81,7 @@ AI assistant của bạn giờ có thể chạy lệnh Windows mà **không bao 
   "arguments": {
     "command": "echo Hello && dir /b",
     "cwd": "C:\\Projects",
-    "timeout": 30000
+    "timeout": 15000
   }
 }
 ```

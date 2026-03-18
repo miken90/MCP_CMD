@@ -699,3 +699,28 @@ test("mixed cmd and powershell workloads resolve without deadlock", async (t) =>
     assert.match(text, /\[EXIT |\[TIMEOUT\]|\[BLOCKED\]/, `Expected terminal status for ${jobs[index].name}`);
   }
 });
+
+test("cmd_run respects long timeout beyond old 30s cap", async (t) => {
+  const { client } = await connectClient(t, {
+    command: "node",
+    args: ["index.js"],
+  });
+
+  // Use 35s timeout — would have been clamped to 30s before this change
+  const started = Date.now();
+  const result = await client.callTool({
+    name: "cmd_run",
+    arguments: {
+      command: "ping -n 6 127.0.0.1",  // ~5s of pinging
+      cwd: repoRoot,
+      timeout: 35000,
+    },
+  });
+  const elapsed = Date.now() - started;
+  const text = resultText(result);
+
+  // Should complete successfully (not timeout at 30s)
+  assert.match(text, /\[EXIT 0\]/);
+  assert.doesNotMatch(text, /\[TIMEOUT\]/);
+  assert.ok(elapsed < 15000, `Expected ping to finish naturally, got ${elapsed}ms`);
+});

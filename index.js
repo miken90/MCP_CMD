@@ -30,7 +30,7 @@ const POWERSHELL_BASE_ARGS = [
 const SECURITY_CONFIG = {
   maxCommandLength: 8192,         // Max command string length (bytes)
   commandTimeout: 15000,          // Default timeout (ms) - 15s balanced for most tasks
-  maxTimeout: 30000,              // Max allowed timeout (ms) - 30s for chained commands
+  maxTimeout: 300000,             // Max allowed timeout (ms) - 5min for builds/installs
   maxOutputSize: 10 * 1024 * 1024, // 10MB output cap
   maxBatchSize: 20,               // Max commands per batch
   rateLimit: 60,                  // Max calls/min for process management tools
@@ -130,9 +130,9 @@ const _runningProcs = new Map();
 const _spawnQueue = [];
 let _activeSlots = 0;
 
-function registerProc(pid, killFn, childRef) {
+function registerProc(pid, killFn, childRef, requestedTimeout = SECURITY_CONFIG.commandTimeout) {
   const now = Date.now();
-  _runningProcs.set(pid, { pid, startedAt: now, lastOutputAt: now, kill: killFn, child: childRef });
+  _runningProcs.set(pid, { pid, startedAt: now, lastOutputAt: now, kill: killFn, child: childRef, requestedTimeout });
 }
 
 function touchProc(pid) {
@@ -199,9 +199,12 @@ const _idleWatchdog = setInterval(() => {
   for (const [pid, entry] of _runningProcs) {
     const idleMs = now - entry.lastOutputAt;
     const lifetimeMs = now - entry.startedAt;
-    if (idleMs > IDLE_TIMEOUT_MS || lifetimeMs > ABSOLUTE_MAX_LIFETIME_MS) {
-      const reason = lifetimeMs > ABSOLUTE_MAX_LIFETIME_MS ? 'lifetime exceeded' : 'idle timeout';
-      process.stderr.write(`[MCP_CMD] Watchdog: killing PID ${pid} (${reason}, idle=${Math.round(idleMs / 1000)}s, lifetime=${Math.round(lifetimeMs / 1000)}s)\n`);
+    // Per-process limits: scale idle/lifetime based on requested timeout
+    const idleLimit = Math.max(IDLE_TIMEOUT_MS, Math.round((entry.requestedTimeout || SECURITY_CONFIG.commandTimeout) * 0.4));
+    const lifetimeLimit = (entry.requestedTimeout || SECURITY_CONFIG.commandTimeout) + 60000;
+    if (idleMs > idleLimit || lifetimeMs > lifetimeLimit) {
+      const reason = lifetimeMs > lifetimeLimit ? 'lifetime exceeded' : 'idle timeout';
+      process.stderr.write(`[MCP_CMD] Watchdog: killing PID ${pid} (${reason}, idle=${Math.round(idleMs / 1000)}s/${Math.round(idleLimit / 1000)}s, lifetime=${Math.round(lifetimeMs / 1000)}s/${Math.round(lifetimeLimit / 1000)}s)\n`);
       try { entry.kill(); } catch (_) { /* best effort */ }
       // Destroy streams to unblock "close" event after kill
       if (entry.child) destroyStreams(entry.child);
@@ -359,7 +362,7 @@ async function runSpawnedProcess(options) {
 
     if (child.pid) {
       _activeChildren.add(child.pid);
-      registerProc(child.pid, () => forceKillTree(child.pid), child);
+      registerProc(child.pid, () => forceKillTree(child.pid), child, timeoutMs);
     }
 
     child.stdin.end();
@@ -631,7 +634,7 @@ server.tool(
     timeout: z
       .number()
       .optional()
-      .describe("Timeout in ms. Defaults to 10000. Max 30000."),
+      .describe("Timeout in ms. Defaults to 10000. Max 300000."),
   },
   async ({ command, cwd, timeout }) => {
     return execCmd(command, { cwd: validateCwd(cwd), timeout });
@@ -1014,7 +1017,7 @@ server.tool(
 // Uses cmd.exe "wmic" (no PowerShell flash) to check for old hanging cmd.exe
 // processes that are NOT MCP infrastructure.
 const ZOMBIE_SCAN_INTERVAL_MS = 30000; // 30s scan interval
-const ZOMBIE_AGE_LIMIT_SEC = 30; // Kill cmd.exe processes older than 30s
+const ZOMBIE_AGE_LIMIT_SEC = 120; // Kill cmd.exe processes older than 120s (raised for long-running builds)
 const INVALID_CMD_AGE_LIMIT_SEC = 10; // Kill known-invalid CMD (e.g. -c flag) after just 10s
 
 async function zombieReaper() {
