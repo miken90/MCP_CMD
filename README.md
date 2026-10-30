@@ -163,6 +163,15 @@ AI assistant của bạn giờ có thể chạy lệnh Windows mà **không bao 
 
 ---
 
+## Cấu hình từ chối lệnh (`--refuse-re`)
+
+Hỗ trợ chặn các lệnh không mong muốn trước khi spawn process:
+
+- `--refuse-re <regex>`: Regex (case-insensitive) so khớp lệnh bị từ chối trong `cmd_run`, `cmd_batch`, và `powershell_run`. Nếu regex không hợp lệ, server sẽ dừng ngay lúc khởi động.
+- `--refuse-msg <text>`: Thông báo trả về khi lệnh bị từ chối (mặc định: `command refused by --refuse-re`).
+
+---
+
 ## Yêu cầu
 
 - **Node.js** v18+

@@ -55,6 +55,64 @@ const FILE_DESTRUCTIVE_COMMANDS = [
 // Combined list for general detection
 const DANGEROUS_COMMANDS = [...ALWAYS_BLOCKED_COMMANDS, ...FILE_DESTRUCTIVE_COMMANDS];
 
+// ─── Command refusal configuration (--refuse-re, --refuse-msg) ──────────────
+function parseRefusalArgs(argv) {
+  let refuseRe = null;
+  let refuseMsg = "command refused by --refuse-re";
+
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--refuse-re") {
+      if (i + 1 >= argv.length) {
+        process.stderr.write("[MCP_CMD] Missing argument for --refuse-re\n");
+        process.exit(1);
+      }
+      const pattern = argv[++i];
+      try {
+        refuseRe = new RegExp(pattern, "i");
+      } catch (err) {
+        process.stderr.write(`[MCP_CMD] Invalid --refuse-re pattern: ${err.message}\n`);
+        process.exit(1);
+      }
+    } else if (arg.startsWith("--refuse-re=")) {
+      const pattern = arg.slice("--refuse-re=".length);
+      try {
+        refuseRe = new RegExp(pattern, "i");
+      } catch (err) {
+        process.stderr.write(`[MCP_CMD] Invalid --refuse-re pattern: ${err.message}\n`);
+        process.exit(1);
+      }
+    } else if (arg === "--refuse-msg") {
+      if (i + 1 >= argv.length) {
+        process.stderr.write("[MCP_CMD] Missing argument for --refuse-msg\n");
+        process.exit(1);
+      }
+      refuseMsg = argv[++i];
+    } else if (arg.startsWith("--refuse-msg=")) {
+      refuseMsg = arg.slice("--refuse-msg=".length);
+    }
+  }
+
+  return { refuseRe, refuseMsg };
+}
+
+const { refuseRe: REFUSE_RE, refuseMsg: REFUSE_MSG } = parseRefusalArgs(process.argv);
+
+function checkRefusal(command) {
+  // ponytail: regex string test only; parse command AST when shell complexity demands.
+  if (REFUSE_RE && typeof command === "string" && REFUSE_RE.test(command)) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `[BLOCKED] ${REFUSE_MSG}\n[EXIT 1]`,
+        },
+      ],
+    };
+  }
+  return null;
+}
+
 // Shell operators that could indicate injection attempts
 const SHELL_OPERATORS = ['&&', '||', '|', '>', '>>', '<', '<<', ';', '`'];
 
@@ -468,6 +526,9 @@ function decodePowerShellClixml(text) {
  * - Uses spawn instead of exec to avoid exec's unreliable timeout on Windows
  */
 async function execCmd(command, options = {}) {
+  const refusal = checkRefusal(command);
+  if (refusal) return refusal;
+
   const cwd = options.cwd || DEFAULT_CWD;
   const timeoutMs = Math.max(100, Math.min(options.timeout || SECURITY_CONFIG.commandTimeout, SECURITY_CONFIG.maxTimeout));
 
@@ -706,6 +767,9 @@ server.tool(
       .describe("Timeout in ms. Defaults to 10000. Max 30000."),
   },
   async ({ command, cwd, timeout }) => {
+    const refusal = checkRefusal(command);
+    if (refusal) return refusal;
+
     const workDir = validateCwd(cwd);
     const timeoutMs = Math.max(100, Math.min(timeout || SECURITY_CONFIG.commandTimeout, SECURITY_CONFIG.maxTimeout));
 
